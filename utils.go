@@ -7,11 +7,12 @@ import (
 func DocumentFromLines(lines []string) (doc Document){
     doc = Document{
         checksums:make(map[string]int),
+        content:Dict{},
         ops:make([]Operation, 0),
     }
     for i, line := range lines{
-        doc.content[strconv.Itoa(i)] = line
+        str := strconv.Itoa(i)
+        doc.content[str] = line
     }
-    return
-
+    return doc
 }

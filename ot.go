@@ -3,6 +3,9 @@ package ot
 import (
     "crypto/sha1"
     "io"
+    "fmt"
+    "strconv"
+    "unsafe"
 )
 
 //Contains operations types
@@ -14,76 +17,146 @@ const (
 )
 
 type Document struct{
-    text string
+    content Dict
     checksums map[string]int
     ops []Operation
 }
 
 type Component struct{
-    componentType OperationType
-    length int
-    str string
+    path []string
+    si string
+    sd string
 }
 
 type Operation []Component
 
-func NewDocument(text string) Document{
+func pathEquals(strslice1, strslice2 []string) (b bool){
+    b = false
+    if len(strslice1) != len(strslice2){
+        return
+    }
+    for i:=0; i<len(strslice1); i++{
+        el1 := strslice1[i]
+        el2 := strslice2[i]
+        if el1 != el2{
+            return
+        }
+    }
+    b = true
+    return
+}
+
+func hash(content Dict) string{
     h := sha1.New()
-    io.WriteString(h, text)
+    for key, val := range content{
+        io.WriteString(h, key)
+        switch value := val.(type){
+        case Dict:
+            io.WriteString(h, hash(value))
+        case []interface{}:
+            for _, el:= range value{
+                switch element := el.(type){
+                case Dict:
+                    io.WriteString(h, hash(element))
+                case fmt.Stringer:
+                    io.WriteString(h, element.String())
+                }
+
+            }
+        case fmt.Stringer:
+            io.WriteString(h, value.String())
+        case unsafe.Pointer:
+            io.WriteString(h, *(*string)(value))
+        }
+    }
+    return string(h.Sum(nil))
+}
+
+func NewDocument(content Dict) Document{
+    h := hash(content)
     return Document{
-        text:text,
+        content:content,
         checksums:map[string]int{
-            string(h.Sum(nil)):0,
+            h:0,
         },
     }
 }
 
+func transformPosition(oldpos int, comp Component) (newpos int){
+    newpos = oldpos
+    compos := comp.position()
+    if comp.si != ""{
+        if compos <= oldpos{
+            newpos += len(comp.si)
+        }
+    }else{
+        if oldpos <= compos{
+            newpos = oldpos
+        }else if oldpos <= compos + len(comp.sd){
+            newpos = compos
+        }else{
+            newpos = oldpos- len(comp.sd)
+        }
+    }
+    return
+
+}
+
+func (comp1 Component)transform(dest *Operation, comp2 Component){
+    pos1 := comp1.position()
+    if comp1.si != ""{   //Insert
+        comp1.setPosition(transformPosition(pos1, comp2))
+    }else{               //Delete
+        if comp2.si != ""{// Delete vs Insert
+            deleted := comp1.sd
+            if pos1 < comp2.position(){
+                (*dest).append(Component{
+                    path:comp1.path,
+                    sd:deleted[:comp2.position() - pos1]})
+                deleted = deleted[comp2.position() - pos1:]
+            }
+            if deleted != ""{
+                (*dest).append(Component{
+                    path:append(comp1.path[:len(comp1.path) - 1], strconv.Itoa(pos1 + len(comp2.si))),
+                    sd:deleted,
+                })
+
+            }
+        }
+    }
+    return
+}
+
+func (op Operation)append(comp Component){
+    op = append(op, comp)
+}
+
 func (op1 Operation)transform(op2 Operation) Operation{
+    for _, comp2 := range op2{
+        for _, comp1 := range op1{
+            comp2path := comp2.path[:len(comp2.path) - 1]
+            comp1path := comp1.path[:len(comp1.path) - 1]
+            if pathEquals(comp1path, comp2path){
+                comp1.transform(&op1, comp2)
+            }
+        }
+    }
     return op1
-}
-
-func (doc Document)insert(pos int, str string) (Document, error){
-    return doc.do(INSERT, pos, str)
-}
-
-func (doc Document)delete(pos int, str string) (Document, error){
-    return doc.do(DELETE, pos, str)
 }
 
 type InvalidComponentError struct {
     msg string
 }
-
 func (e InvalidComponentError) Error() string{
     return e.msg
 }
 
+
 func (doc Document) checksum() string{
-    h := sha1.New()
-    io.WriteString(h, doc.text)
-    return string(h.Sum(nil))
+    return hash(doc.content)
 }
 
-func (doc Document) NewOperation(typeOp OperationType, pos int, str string) (Operation, string){
-    op := Operation{
-        Component{
-            componentType:SKIP,
-            length:pos,
-        },
-        Component{
-            componentType:typeOp,
-            str:str,
-        },
-    }
-    return op, doc.checksum()
-}
-
-func (doc Document) do(typeOp OperationType, pos int, str string) (Document, error){
-    op, check := doc.NewOperation(typeOp, pos, str)
-    return doc.apply(op, check)
-}
-
-func (doc Document) apply(op Operation, checksum string) (Document, error){
+func (doc *Document) apply(op Operation, checksum string) (err error){
     last_op_index := doc.checksums[checksum]
     if last_op_index != len(doc.ops){
         transform_ops := doc.ops[last_op_index:]
@@ -92,32 +165,43 @@ func (doc Document) apply(op Operation, checksum string) (Document, error){
             op = op.transform(top)
         }
     }
-    position := 0
-    str := doc.text
-    new_str := ""
+    content := doc.content
     for c:=0; c<len(op); c++{
         comp:=op[c]
-        switch (comp.componentType){
-        case INSERT:
-            new_str += comp.str
-        case DELETE:
-            str_length := len(comp.str)
-            deleted := str[position:position+str_length]
-            if deleted != comp.str{
-                return doc, InvalidComponentError{"Trying to delete inexistent str"}
+        if comp.si != ""{
+            index := comp.position()
+            str, err := content.get(comp.path[:len(comp.path) - 1])
+            if err != nil{
+                return InvalidComponentError{msg:str}
             }
-            position += str_length
-        case SKIP:
-            new_str += str[position:position+comp.length]
-            position += comp.length
+            str = str[:index] + comp.si + str[index:]
+            content.set(comp.path[:len(comp.path)-1], str)
+        }
+        if comp.sd != ""{
+            str, err := content.get(comp.path[:len(comp.path) - 1])
+            if err!=nil{
+                return err
+            }
+            str_length := len(comp.sd)
+            index := comp.position()
+            deleted := str[index:index+str_length]
+            if deleted != comp.sd {
+                return InvalidComponentError{"Trying to delete '" + comp.sd + "' but found '" + deleted + "' instead"}
+            }
+            new_str := str[:index] + str[index+str_length:]
+            content.set(comp.path[:len(comp.path) - 1], new_str)
         }
     }
-    new_str += str[position:]
-
-    doc.text = new_str
     doc.ops = append(doc.ops, op)
-    h := sha1.New()
-    io.WriteString(h, doc.text)
-    doc.checksums[string(h.Sum(nil))] = len(doc.ops)
-    return doc, nil
+    doc.checksums[doc.checksum()] = len(doc.ops)
+    return nil
+}
+
+func (comp Component) position() (pos int){
+    pos, _ = strconv.Atoi(comp.path[len(comp.path) - 1])
+    return
+}
+func (comp Component) setPosition(newpos int){
+    comp.path[len(comp.path) - 1] = strconv.Itoa(newpos)
+    return
 }

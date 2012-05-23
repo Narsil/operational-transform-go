@@ -8,30 +8,33 @@ import (
 	"unsafe"
 )
 
-//Contains operations types
-type OperationType int
-
-const (
-	INSERT = 1
-	DELETE = 2
-	SKIP   = 3
-)
-
+//This is document type. Dict is a very flexible struct to contain python like
+//dict structure. For now only supports string inserts and deletes. Checksums
+//is a mapping between the checksum of a document and the index within the ops
+//array. It is used when receiving remote ops that where built against old versions
+//of the doc to transform received operation against the operation that occured
+//locally in the meantime.
 type Document struct {
 	content   Dict
 	checksums map[string]int
 	ops       []Operation
 }
 
-type Component struct {
-	path []string
-	si   string
-	sd   string
-}
-
+//An operation is a list of components. To build a complex operation use
+// op.Append(component).
 type Operation []Component
 
-func pathEquals(strslice1, strslice2 []string) (b bool) {
+//Components contains a Path ["doc", "toto", "0"], that is the list of keys
+//to descend to underlying strings and apply inserts and deletes contained 
+//within either si or Sd.
+type Component struct {
+	Path []string
+	Si   string
+	Sd   string
+}
+
+//Compares two strings to see if they are the same Path.
+func PathEquals(strslice1, strslice2 []string) (b bool) {
 	b = false
 	if len(strslice1) != len(strslice2) {
 		return
@@ -47,6 +50,8 @@ func pathEquals(strslice1, strslice2 []string) (b bool) {
 	return
 }
 
+//hashes a Dict, to produce checksums used within Document struct. hashes reflects
+//the whole dict, both values and keys to be unique for each document.
 func hash(content Dict) string {
 	h := sha1.New()
 	for key, val := range content {
@@ -73,53 +78,60 @@ func hash(content Dict) string {
 	return string(h.Sum(nil))
 }
 
-func NewDocument(content Dict) Document {
+//Returns a new document containing initialized map, from dict.
+func NewDocument(content Dict) (doc Document) {
 	h := hash(content)
-	return Document{
+    doc = Document{
 		content: content,
 		checksums: map[string]int{
 			h: 0,
 		},
 	}
+    return
 }
 
+//Given the old position of an insert operation returns its new position
+//when transforming against another component.
 func transformPosition(oldpos int, comp Component) (newpos int) {
 	newpos = oldpos
 	compos := comp.position()
-	if comp.si != "" {
+	if comp.Si != "" {
 		if compos <= oldpos {
-			newpos += len(comp.si)
+			newpos += len(comp.Si)
 		}
 	} else {
 		if oldpos <= compos {
 			newpos = oldpos
-		} else if oldpos <= compos+len(comp.sd) {
+		} else if oldpos <= compos+len(comp.Sd) {
 			newpos = compos
 		} else {
-			newpos = oldpos - len(comp.sd)
+			newpos = oldpos - len(comp.Sd)
 		}
 	}
 	return
 
 }
 
+//Transforms a component against another one. We use dest to accumulate 
+//components because the transform of a component may result in several
+//components.
 func (comp1 Component) transform(dest *Operation, comp2 Component) {
 	pos1 := comp1.position()
-	if comp1.si != "" { //Insert
+	if comp1.Si != "" { //Insert
 		comp1.setPosition(transformPosition(pos1, comp2))
 	} else { //Delete
-		if comp2.si != "" { // Delete vs Insert
-			deleted := comp1.sd
+		if comp2.Si != "" { // Delete vs Insert
+			deleted := comp1.Sd
 			if pos1 < comp2.position() {
-				(*dest).append(Component{
-					path: comp1.path,
-					sd:   deleted[:comp2.position()-pos1]})
+				(*dest).Append(Component{
+					Path: comp1.Path,
+					Sd:   deleted[:comp2.position()-pos1]})
 				deleted = deleted[comp2.position()-pos1:]
 			}
 			if deleted != "" {
-				(*dest).append(Component{
-					path: append(comp1.path[:len(comp1.path)-1], strconv.Itoa(pos1+len(comp2.si))),
-					sd:   deleted,
+				(*dest).Append(Component{
+					Path: append(comp1.Path[:len(comp1.Path)-1], strconv.Itoa(pos1+len(comp2.Si))),
+					Sd:   deleted,
 				})
 
 			}
@@ -128,16 +140,20 @@ func (comp1 Component) transform(dest *Operation, comp2 Component) {
 	return
 }
 
-func (op Operation) append(comp Component) {
+//Appends a new component to an operation. If many components already exists
+//within op, it will try to compress them in as few components as possible.
+func (op Operation) Append(comp Component) {
 	op = append(op, comp)
 }
 
+//transforms an operation against another one. This basically transform every
+//component against every other component
 func (op1 Operation) transform(op2 Operation) Operation {
 	for _, comp2 := range op2 {
 		for _, comp1 := range op1 {
-			comp2path := comp2.path[:len(comp2.path)-1]
-			comp1path := comp1.path[:len(comp1.path)-1]
-			if pathEquals(comp1path, comp2path) {
+			comp2Path := comp2.Path[:len(comp2.Path)-1]
+			comp1Path := comp1.Path[:len(comp1.Path)-1]
+			if PathEquals(comp1Path, comp2Path) {
 				comp1.transform(&op1, comp2)
 			}
 		}
@@ -153,11 +169,17 @@ func (e InvalidComponentError) Error() string {
 	return e.msg
 }
 
-func (doc Document) checksum() string {
+//Returns the hash of the document. Used to determine version of doc (but 
+//timeline agnostic as it only depends on the content.
+func (doc Document) Checksum() string {
 	return hash(doc.content)
 }
 
-func (doc *Document) apply(op Operation, checksum string) (err error) {
+
+//Applies an operation to a document. checksum argument represents what
+//checksum the document was built against. It is useful when receiving
+//remote ops to know how to tranform received op against local ops.
+func (doc *Document) Apply(op Operation, checksum string) (err error) {
 	last_op_index := doc.checksums[checksum]
 	if last_op_index != len(doc.ops) {
 		transform_ops := doc.ops[last_op_index:]
@@ -169,40 +191,59 @@ func (doc *Document) apply(op Operation, checksum string) (err error) {
 	content := doc.content
 	for c := 0; c < len(op); c++ {
 		comp := op[c]
-		if comp.si != "" {
+		if comp.Si != "" {
 			index := comp.position()
-			str, err := content.get(comp.path[:len(comp.path)-1])
+			str, err := content.get(comp.Path[:len(comp.Path)-1])
 			if err != nil {
 				return InvalidComponentError{msg: str}
 			}
-			str = str[:index] + comp.si + str[index:]
-			content.set(comp.path[:len(comp.path)-1], str)
+			str = str[:index] + comp.Si + str[index:]
+			content.set(comp.Path[:len(comp.Path)-1], str)
 		}
-		if comp.sd != "" {
-			str, err := content.get(comp.path[:len(comp.path)-1])
+		if comp.Sd != "" {
+			str, err := content.get(comp.Path[:len(comp.Path)-1])
 			if err != nil {
 				return err
 			}
-			str_length := len(comp.sd)
+			str_length := len(comp.Sd)
 			index := comp.position()
 			deleted := str[index : index+str_length]
-			if deleted != comp.sd {
-				return InvalidComponentError{"Trying to delete '" + comp.sd + "' but found '" + deleted + "' instead"}
+			if deleted != comp.Sd {
+				return InvalidComponentError{"Trying to delete '" + comp.Sd + "' but found '" + deleted + "' instead"}
 			}
 			new_str := str[:index] + str[index+str_length:]
-			content.set(comp.path[:len(comp.path)-1], new_str)
+			content.set(comp.Path[:len(comp.Path)-1], new_str)
 		}
 	}
 	doc.ops = append(doc.ops, op)
-	doc.checksums[doc.checksum()] = len(doc.ops)
+	doc.checksums[doc.Checksum()] = len(doc.ops)
 	return nil
 }
 
+//Returns the position at which a component is operating.
 func (comp Component) position() (pos int) {
-	pos, _ = strconv.Atoi(comp.path[len(comp.path)-1])
+	pos, _ = strconv.Atoi(comp.Path[len(comp.Path)-1])
 	return
 }
+
+//Sets position of component.
 func (comp Component) setPosition(newpos int) {
-	comp.path[len(comp.path)-1] = strconv.Itoa(newpos)
+	comp.Path[len(comp.Path)-1] = strconv.Itoa(newpos)
 	return
+}
+
+//HelperFunction to create a new component. To be used in all cases because
+//struct members are all private.
+func NewInsertComponent(Path []string, str string) (comp Component){
+    comp.Path = Path
+    comp.Si = str
+    return
+}
+
+//HelperFunction to create a new component. To be used in all cases because
+//struct members are all private.
+func NewDeleteComponent(Path []string, str string) (comp Component){
+    comp.Path = Path
+    comp.Sd = str
+    return
 }

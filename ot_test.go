@@ -23,7 +23,7 @@ func TestDocumentValidOps(t *testing.T) {
 		Path: []string{"doc", "12"},
 		Sd:   "is ",
 	}}
-	err := doc.Apply(op1, doc.Checksum())
+	err := doc.applyNoRemote(op1, doc.Checksum())
 
 	if err != nil {
 		t.Errorf("Simple Operation failed (Error %q)", err)
@@ -51,11 +51,11 @@ func TestDocumentConcurrentLeft(t *testing.T) {
 	// Combination of both should end up in Hahaho this is some text
 
 	//RIGHT OP
-	err := doc.Apply(op2, check)
+	err := doc.applyNoRemote(op2, check)
 	if err != nil {
 		t.Errorf("Simple Operation failed (Error %q)", err)
 	}
-	err = doc.Apply(op1, check)
+	err = doc.applyNoRemote(op1, check)
 	if err != nil {
 		t.Errorf("Concurrent Left Operation failed (Error %q)", err)
 	}
@@ -82,11 +82,11 @@ func TestConcurrentRight(t *testing.T) {
 	// Combination of both should end up in Hahaho this is some text
 
 	//LEFT OP
-	err := doc.Apply(op1, check)
+	err := doc.applyNoRemote(op1, check)
 	if err != nil {
 		t.Errorf("Simple Operation failed (Error %q)", err)
 	}
-	err = doc.Apply(op2, check)
+	err = doc.applyNoRemote(op2, check)
 	if err != nil {
 		t.Errorf("Concurrent Right Operation failed (Error %q)", err)
 	}
@@ -107,7 +107,7 @@ func TestInvalidDeletes(t *testing.T) {
 		Path: []string{"doc", "0"},
 		Sd:   "is ",
 	}}
-	err := doc.Apply(op, doc.Checksum())
+	err := doc.applyNoRemote(op, doc.Checksum())
 	if _, ok := err.(InvalidComponentError); !ok {
 		t.Error("Invalid DELETE did not raise error")
 	}
@@ -120,7 +120,7 @@ func BenchmarkApplyInserts(b *testing.B) {
 		Si:   "ha ",
 	}}
 	for i := 0; i < b.N; i++ {
-		doc.Apply(op, doc.Checksum())
+		doc.applyNoRemote(op, doc.Checksum())
 	}
 }
 
@@ -136,6 +136,6 @@ func BenchmarkApplyDeletes(b *testing.B) {
 		Sd:   "H",
 	}}
 	for i := 0; i < b.N; i++ {
-		doc.Apply(op, doc.Checksum())
+		doc.applyNoRemote(op, doc.Checksum())
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"unsafe"
+    "net"
 )
 
 //This is document type. Dict is a very flexible struct to contain python like
@@ -18,6 +19,8 @@ type Document struct {
 	content   Dict
 	checksums map[string]int
 	ops       []Operation
+    hosts []string
+    listen net.Listener
 }
 
 //An operation is a list of components. To build a complex operation use
@@ -175,11 +178,11 @@ func (doc Document) Checksum() string {
 	return hash(doc.content)
 }
 
-
-//Applies an operation to a document. checksum argument represents what
+//Applies an operation.checksum argument represents what
 //checksum the document was built against. It is useful when receiving
 //remote ops to know how to tranform received op against local ops.
-func (doc *Document) Apply(op Operation, checksum string) (err error) {
+//Apply func is in network.go
+func (doc *Document) applyNoRemote(op Operation, checksum string) (err error) {
 	last_op_index := doc.checksums[checksum]
 	if last_op_index != len(doc.ops) {
 		transform_ops := doc.ops[last_op_index:]

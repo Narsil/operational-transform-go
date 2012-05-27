@@ -13,6 +13,18 @@ func newTestDocument() Document {
 		}}
 }
 
+func TestDocumentRead(t *testing.T){
+	doc := newTestDocument()
+	target := "Haha this is is some text"
+    result, err := doc.Get([]string{"doc"})
+    if err != nil{
+        t.Errorf("Cannot read document:", err)
+    }
+    if result != target{
+        t.Errorf("Cannot read document got %q expected %q", result, target)
+    }
+}
+
 func TestDocumentValidOps(t *testing.T) {
 	doc := newTestDocument()
 	target := "Hahaho this is some text"

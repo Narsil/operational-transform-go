@@ -245,8 +245,14 @@ func NewInsertComponent(Path []string, str string) (comp Component){
 
 //HelperFunction to create a new component. To be used in all cases because
 //struct members are all private.
-func NewDeleteComponent(Path []string, str string) (comp Component){
-    comp.Path = Path
+func NewDeleteComponent(path []string, str string) (comp Component){
+    comp.Path = path
     comp.Sd = str
     return
+}
+
+//In order to access portions of the document. path is the list of keys in
+//descending order to access final string.
+func (doc *Document) Get(path []string) (inner string, err error){
+    return doc.content.get(path)
 }
